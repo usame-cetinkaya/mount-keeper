@@ -1,0 +1,36 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["*.*.*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        run: swift test
+
+      - name: Build
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then export VERSION="$GITHUB_REF_NAME"; fi
+          scripts/build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mount-Keeper-dmg
+          path: dist/*.dmg
+
+      - name: Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.dmg --title "$GITHUB_REF_NAME" --generate-notes
