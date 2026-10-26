@@ -31,4 +31,4 @@ A background app that keeps network shares mounted across sleep and network chan
 
 ## Packaging
 
-`scripts/build.sh` assembles the bundle by hand from `Resources/` (Info.plist with `LSUIElement`, AppIcon.icns), strips and ad-hoc signs it (`CODESIGN_IDENTITY` overrides), and creates an LZMA-compressed DMG. `.github/workflows/build.yml` runs tests and builds on every push; pushing a tag like `1.2.3` publishes a GitHub release.
+`scripts/build.sh` assembles the bundle by hand from `Resources/` (Info.plist with `LSUIElement`, AppIcon.icns), strips and ad-hoc signs it (`CODESIGN_IDENTITY` overrides), and creates an LZMA-compressed DMG. `.github/workflows/release.yml` runs only when a tag like `1.2.3` is pushed, not on other pushes: it tests, builds and publishes a GitHub release with the dmg.

@@ -71,4 +71,4 @@ If a share keeps showing "Couldn't sign in", click **Mount Now** and save the pa
 - `swift test` runs the unit tests.
 - `swift scripts/make-icon.swift` redraws `Resources/AppIcon.icns`.
 
-Pushing a tag like `1.2.3` publishes a GitHub release with the `.dmg`.
+GitHub builds only for releases, not on every push: pushing a tag like `1.2.3` runs the tests, builds the `.dmg` and publishes it as a GitHub release.
