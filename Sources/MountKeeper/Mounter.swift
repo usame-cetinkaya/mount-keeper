@@ -1,12 +1,15 @@
 import AppKit
 import Network
+import os
 
 /// Keeps every share in the store mounted.
 ///
 /// Checks run once a minute, after the Mac wakes and whenever the network
 /// comes up. A check does nothing if the share is mounted, nothing if the
 /// server doesn't answer, and otherwise mounts it quietly with the password
-/// saved in Keychain.
+/// saved in Keychain. A share that fails to mount is retried after 1, 2, 4…
+/// up to 30 minutes, so a wrong saved password can't lock the account on the
+/// server; Mount Now retries right away.
 @MainActor
 final class Mounter {
     enum Status: Equatable {
@@ -27,6 +30,8 @@ final class Mounter {
     private var timer: Timer?
     private var pendingCheck: DispatchWorkItem?
     private let pathMonitor = NWPathMonitor()
+    private var network: String?
+    private var failures: [String: (count: Int, retryAt: Date)] = [:]
 
     init(store: ShareStore) {
         self.store = store
@@ -47,8 +52,15 @@ final class Mounter {
             }
         }
         pathMonitor.pathUpdateHandler = { [weak self] path in
-            guard path.status == .satisfied else { return }
-            Task { @MainActor in self?.checkAll(after: 2) }
+            // The monitor also fires when nothing we care about changed (a failed
+            // mount attempt is enough), so only react to a new set of interfaces.
+            let network = "\(path.status) \(path.availableInterfaces.map(\.name)) \(path.gateways)"
+            let satisfied = path.status == .satisfied
+            Task { @MainActor in
+                guard let self, network != self.network else { return }
+                self.network = network
+                if satisfied { self.checkAll(after: 2) }
+            }
         }
         pathMonitor.start(queue: .main)
         checkAll()
@@ -73,6 +85,7 @@ final class Mounter {
     func check(_ shares: [String], allowUI: Bool) {
         let mounts = MountTable.networkShares()
         statuses = statuses.filter { store.shares.contains($0.key) }
+        failures = failures.filter { store.shares.contains($0.key) }
         for share in shares {
             check(share, mounts: mounts, allowUI: allowUI)
         }
@@ -92,6 +105,11 @@ final class Mounter {
             statuses[share] = .mounted(at: mounted.mountPoint)
             return
         }
+        if allowUI {
+            failures[share] = nil
+        } else if let failure = failures[share], Date() < failure.retryAt {
+            return
+        }
         guard !inFlight.contains(share),
               let url = ShareAddress.url(from: share),
               let port = ShareAddress.port(for: share) else { return }
@@ -106,6 +124,7 @@ final class Mounter {
             }
             guard reachable else {
                 inFlight.remove(share)
+                failures[share] = nil
                 update(share, .unreachable)
                 return
             }
@@ -115,8 +134,10 @@ final class Mounter {
                 guard self.store.shares.contains(share) else { return }
                 // The mount table is the source of truth: an "already mounted" error is a success.
                 if let mounted = MountTable.networkShares().first(where: { $0.address == address }) {
+                    self.failures[share] = nil
                     self.update(share, .mounted(at: mounted.mountPoint))
                 } else {
+                    self.recordFailure(share)
                     self.update(share, .failed(error ?? "Mounted, but the share isn't in the mount table."))
                 }
             }
@@ -137,8 +158,21 @@ final class Mounter {
         onChange?()
     }
 
+    private func recordFailure(_ share: String) {
+        let count = (failures[share]?.count ?? 0) + 1
+        let delay = min(60 * pow(2, Double(count - 1)), 30 * 60)
+        failures[share] = (count, Date().addingTimeInterval(delay))
+    }
+
     private func update(_ share: String, _ status: Status) {
+        if statuses[share] != status {
+            Self.log.notice("\(share, privacy: .public): \(String(describing: status), privacy: .public)")
+        }
         statuses[share] = status
         onChange?()
     }
+
+    /// Status changes, readable in Console or with
+    /// `log show --predicate 'subsystem == "com.usamecetinkaya.mount-keeper"' --last 1h`.
+    private static let log = Logger(subsystem: "com.usamecetinkaya.mount-keeper", category: "mount")
 }
